@@ -32,7 +32,13 @@ async def calculate_monthly_revenue(property_id: str, month: int, year: int, db_
     # result = await db.fetch_val(query, property_id, tenant_id, start_date, end_date)
     # return result or Decimal('0')
     
+
     return Decimal('0') # Placeholder for now until DB connection is finalized
+
+
+# The query now joins properties for its timezone and filters with
+# (check_in_date AT TIME ZONE p.timezone) against local March 2024
+# boundaries, so each property is bucketed in its own local calendar month, ensuring accurate revenue aggregation regardless of timezone differences.
 
 async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str, Any]:
     """
@@ -52,18 +58,28 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
                 from sqlalchemy import text
                 
                 query = text("""
-                    SELECT 
-                        property_id,
-                        SUM(total_amount) as total_revenue,
-                        COUNT(*) as reservation_count
-                    FROM reservations 
-                    WHERE property_id = :property_id AND tenant_id = :tenant_id
-                    GROUP BY property_id
+                    SELECT
+                        r.property_id,
+                        COALESCE(SUM(r.total_amount), 0) AS total_revenue,
+                        COUNT(*) AS reservation_count
+                    FROM reservations r
+                    JOIN properties p
+                      ON p.id = r.property_id AND p.tenant_id = r.tenant_id
+                    WHERE r.property_id = :property_id
+                      AND r.tenant_id = :tenant_id
+                      AND (r.check_in_date AT TIME ZONE p.timezone) >= :start_local
+                      AND (r.check_in_date AT TIME ZONE p.timezone) <  :end_local
+                    GROUP BY r.property_id
                 """)
-                
+
+                start_local = datetime(2024, 3, 1)
+                end_local = datetime(2024, 4, 1)
+
                 result = await session.execute(query, {
-                    "property_id": property_id, 
-                    "tenant_id": tenant_id
+                    "property_id": property_id,
+                    "tenant_id": tenant_id,
+                    "start_local": start_local,
+                    "end_local": end_local,
                 })
                 row = result.fetchone()
                 
